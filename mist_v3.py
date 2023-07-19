@@ -21,6 +21,10 @@ from pytorch_lightning import seed_everything
 from ldm.util import instantiate_from_config
 from advertorch.attacks import LinfPGDAttack
 
+from utils.pgd import Linf_PGD
+from utils.tools import si
+
+import time
 
 ssl._create_default_https_context = ssl._create_unverified_context
 os.environ['TORCH_HOME'] = os.getcwd()
@@ -221,6 +225,7 @@ def infer(img: PIL.Image.Image, config, tar_img: PIL.Image.Image = None) -> np.n
     parameters = config['parameters']
     mode = parameters['mode']
     epsilon = parameters["epsilon"]
+    
     alpha = parameters["alpha"]
     steps = parameters["steps"]
     input_size = parameters["input_size"]
@@ -243,8 +248,25 @@ def infer(img: PIL.Image.Image, config, tar_img: PIL.Image.Image = None) -> np.n
     print(net(data_source, components=True))
 
     # Targeted PGD attack is applied.
-    attack = LinfPGDAttack(net, fn, epsilon, steps, eps_iter=alpha, clip_min=-1.0, targeted=True)
-    attack_output = attack.perturb(data_source, label)
+    
+    if mode != 3: # using raw PGD
+            
+        attack = LinfPGDAttack(net, fn, epsilon, steps, eps_iter=alpha, clip_min=-1.0, targeted=True)
+        attack_output = attack.perturb(data_source, label)
+    
+    else: # apply SDS to speed up the PGD
+        
+        print('using sds')
+        
+        attack =  Linf_PGD(net, fn, epsilon, steps=steps, eps_iter=alpha, clip_min=-1.0, targeted=True, attack_type='PGD_SDS')
+        attack_output = attack.pgd_sds(X=data_source, net=net, c=net.condition)
+        
+        print(torch.abs(attack_output-data_source).max())
+        
+        
+        
+        
+    
     print(net(attack_output, components=True))
 
     output = attack_output[0]
@@ -259,16 +281,23 @@ def infer(img: PIL.Image.Image, config, tar_img: PIL.Image.Image = None) -> np.n
 # the image blockwisely for lower VRAM cost
 
 if __name__ == "__main__":
-    epsilon = int(sys.argv[1])
-    steps = int(sys.argv[2])
-    input_size = int(sys.argv[3])
-    block_num = int(sys.argv[4])
-    mode = int(sys.argv[5])
-    rate = 10 ** (int(sys.argv[6]) + 3)
+    time_start = time.time()
+    
+    epsilon = int(sys.argv[1]) # 16
+    steps = int(sys.argv[2]) # 100
+    input_size = int(sys.argv[3]) # 512
+    block_num = int(sys.argv[4]) # 1
+    mode = int(sys.argv[5]) # 2
+    rate = 10 ** (int(sys.argv[6]) + 3) # 1
 
     bls = input_size//block_num
     
     image_path = './test/film_poster/marvel.png'
+    name='marvel'
+    # image_path = './test/jp_cartoon/suzume.png'
+    # name='suzume'
+    
+    
     target_image_path = 'MIST.png'
     img = load_image_from_path(image_path, input_size)
     tar_img = load_image_from_path(target_image_path, input_size)
@@ -283,10 +312,14 @@ if __name__ == "__main__":
             tar_block = Image.fromarray(np.array(tar_img)[bls*i: bls*i+bls, bls*j: bls*j + bls])
             output_image[bls*i: bls*i+bls, bls*j: bls*j + bls] = infer(img_block, config, tar_block)
     output = Image.fromarray(output_image.astype(np.uint8))
-    output_name = './test/misted_sample_'
+    output_name = f'./test/misted_sample_{name}_'
     for i in range(5):
         output_name += (sys.argv[i+1] + '_')
     if mode >= 2:
         output_name += (sys.argv[6])
     output_path = output_name + '.png'
     output.save(output_path)
+    
+    
+    
+    print('TIME CMD=', time.time() - time_start)
